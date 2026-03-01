@@ -5,6 +5,12 @@ use std::path::{Path, PathBuf};
 use crate::model::clash::ProxyGroup;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleFileRef {
+    pub path: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub mihomo: MihomoConfig,
@@ -20,6 +26,8 @@ pub struct AppConfig {
     pub proxy_groups: Vec<ProxyGroup>,
     #[serde(default)]
     pub rules: Vec<String>,
+    #[serde(default)]
+    pub rule_files: Vec<RuleFileRef>,
     #[serde(default)]
     pub base: serde_yaml_ng::Value,
 }
@@ -83,6 +91,11 @@ impl AppConfig {
         Ok(Self::config_dir()?.join("subscriptions"))
     }
 
+    /// Get the rules directory (~/.config/verge-cli/rules/)
+    pub fn rules_dir() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("rules"))
+    }
+
     /// Load config from a file path
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
@@ -142,13 +155,14 @@ impl Default for AppConfig {
             proxies: Vec::new(),
             proxy_groups: Vec::new(),
             rules: Vec::new(),
+            rule_files: Vec::new(),
             base: serde_yaml_ng::Value::Mapping(Default::default()),
         }
     }
 }
 
 /// Expand ~ to the user's home directory
-fn expand_tilde(path: &str) -> Result<String> {
+pub fn expand_tilde(path: &str) -> Result<String> {
     if let Some(rest) = path.strip_prefix("~/") {
         let home = dirs::home_dir().context("failed to determine home directory")?;
         Ok(format!("{}/{}", home.display(), rest))
@@ -192,6 +206,7 @@ mod tests {
         assert!(config.proxies.is_empty());
         assert!(config.proxy_groups.is_empty());
         assert!(config.rules.is_empty());
+        assert!(config.rule_files.is_empty());
         assert_eq!(config.output_path, "~/.config/verge-cli/generated.yaml");
     }
 

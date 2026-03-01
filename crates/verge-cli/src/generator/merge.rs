@@ -3,7 +3,7 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::config::app_config::AppConfig;
+use crate::config::app_config::{expand_tilde, AppConfig};
 use crate::model::clash::{ClashConfig, ProxyGroup};
 use crate::subscription::parser;
 
@@ -160,13 +160,50 @@ pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
         .collect();
 
     let mut rules: Vec<String> = Vec::new();
-    // Custom rules first
+    // Custom rules first (highest priority)
     for rule in &config.rules {
         if !rule.starts_with("MATCH") {
             rules.push(rule.clone());
         }
     }
-    // Then subscription rules (dedup, validate target exists)
+    // Then rule files (in order of appearance in config)
+    for rule_file_ref in &config.rule_files {
+        let expanded_path = expand_tilde(&rule_file_ref.path)
+            .with_context(|| format!("failed to expand path: {}", rule_file_ref.path))?;
+        let path = std::path::Path::new(&expanded_path);
+        if !path.exists() {
+            eprintln!(
+                "warning: rule file not found: {}",
+                rule_file_ref.path
+            );
+            continue;
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read rule file: {}", rule_file_ref.path))?;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<&str> = line.splitn(4, ',').collect();
+            let expanded_rule = if fields.len() >= 3 {
+                // Full rule: use as-is (target from file overrides default)
+                line.to_string()
+            } else {
+                // Payload-only: append default target
+                format!("{},{}", line, rule_file_ref.target)
+            };
+            if rule_target_valid(&expanded_rule, &valid_targets) {
+                rules.push(expanded_rule);
+            } else {
+                eprintln!(
+                    "warning: dropped rule from '{}': {} (target not found)",
+                    rule_file_ref.path, expanded_rule
+                );
+            }
+        }
+    }
+    // Then subscription rules (lowest priority, dedup, validate target exists)
     let custom_set: HashSet<String> = rules.iter().cloned().collect();
     let mut dropped_rules = 0usize;
     for rule in &sub_rules {
@@ -534,5 +571,168 @@ mod tests {
         let clash = generate(&config).unwrap();
         // Should get default MATCH,DIRECT
         assert_eq!(clash.rules.last().unwrap(), "MATCH,DIRECT");
+    }
+
+    #[test]
+    fn generate_rule_files_payload_only_appends_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule_file = dir.path().join("ai.rules");
+        std::fs::write(
+            &rule_file,
+            "# AI services\nDOMAIN-SUFFIX,anthropic.com\nDOMAIN-SUFFIX,claude.ai\n",
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.proxy_groups = vec![ProxyGroup {
+            name: "Claude".to_string(),
+            group_type: "select".to_string(),
+            proxies: vec!["DIRECT".to_string()],
+            url: None,
+            interval: None,
+            strategy: None,
+            filter: None,
+            extra: Default::default(),
+        }];
+        config.rule_files = vec![crate::config::app_config::RuleFileRef {
+            path: rule_file.to_str().unwrap().to_string(),
+            target: "Claude".to_string(),
+        }];
+
+        let clash = generate(&config).unwrap();
+        // Rules from file should have target appended
+        assert!(clash
+            .rules
+            .contains(&"DOMAIN-SUFFIX,anthropic.com,Claude".to_string()));
+        assert!(clash
+            .rules
+            .contains(&"DOMAIN-SUFFIX,claude.ai,Claude".to_string()));
+    }
+
+    #[test]
+    fn generate_rule_files_full_rule_uses_as_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule_file = dir.path().join("mixed.rules");
+        std::fs::write(
+            &rule_file,
+            "DOMAIN-SUFFIX,anthropic.com\nDOMAIN-SUFFIX,openai.com,ChatGPT\n",
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.proxy_groups = vec![
+            ProxyGroup {
+                name: "Claude".to_string(),
+                group_type: "select".to_string(),
+                proxies: vec!["DIRECT".to_string()],
+                url: None,
+                interval: None,
+                strategy: None,
+                filter: None,
+                extra: Default::default(),
+            },
+            ProxyGroup {
+                name: "ChatGPT".to_string(),
+                group_type: "select".to_string(),
+                proxies: vec!["DIRECT".to_string()],
+                url: None,
+                interval: None,
+                strategy: None,
+                filter: None,
+                extra: Default::default(),
+            },
+        ];
+        config.rule_files = vec![crate::config::app_config::RuleFileRef {
+            path: rule_file.to_str().unwrap().to_string(),
+            target: "Claude".to_string(),
+        }];
+
+        let clash = generate(&config).unwrap();
+        // Payload-only: target appended from config
+        assert!(clash
+            .rules
+            .contains(&"DOMAIN-SUFFIX,anthropic.com,Claude".to_string()));
+        // Full rule: target from file, not config
+        assert!(clash
+            .rules
+            .contains(&"DOMAIN-SUFFIX,openai.com,ChatGPT".to_string()));
+    }
+
+    #[test]
+    fn generate_rule_files_priority_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule_file = dir.path().join("test.rules");
+        std::fs::write(&rule_file, "DOMAIN-SUFFIX,fileset.com\n").unwrap();
+
+        let mut config = AppConfig::default();
+        config.proxy_groups = vec![ProxyGroup {
+            name: "Proxy".to_string(),
+            group_type: "select".to_string(),
+            proxies: vec!["DIRECT".to_string()],
+            url: None,
+            interval: None,
+            strategy: None,
+            filter: None,
+            extra: Default::default(),
+        }];
+        config.rules = vec![
+            "DOMAIN-SUFFIX,inline.com,Proxy".to_string(),
+            "MATCH,Proxy".to_string(),
+        ];
+        config.rule_files = vec![crate::config::app_config::RuleFileRef {
+            path: rule_file.to_str().unwrap().to_string(),
+            target: "Proxy".to_string(),
+        }];
+
+        let clash = generate(&config).unwrap();
+        // Inline rules first, then rule file rules, then MATCH last
+        assert_eq!(clash.rules[0], "DOMAIN-SUFFIX,inline.com,Proxy");
+        assert_eq!(clash.rules[1], "DOMAIN-SUFFIX,fileset.com,Proxy");
+        assert!(clash.rules.last().unwrap().starts_with("MATCH"));
+    }
+
+    #[test]
+    fn generate_rule_files_missing_file_warns_but_continues() {
+        let mut config = AppConfig::default();
+        config.rule_files = vec![crate::config::app_config::RuleFileRef {
+            path: "/nonexistent/path/test.rules".to_string(),
+            target: "Proxy".to_string(),
+        }];
+
+        // Should not error, just warn
+        let clash = generate(&config).unwrap();
+        assert_eq!(clash.rules.len(), 1); // Only MATCH,DIRECT
+    }
+
+    #[test]
+    fn generate_rule_files_skips_comments_and_blanks() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule_file = dir.path().join("test.rules");
+        std::fs::write(
+            &rule_file,
+            "# comment\n\n  \n# another comment\nDOMAIN-SUFFIX,valid.com\n\n",
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.proxy_groups = vec![ProxyGroup {
+            name: "Proxy".to_string(),
+            group_type: "select".to_string(),
+            proxies: vec!["DIRECT".to_string()],
+            url: None,
+            interval: None,
+            strategy: None,
+            filter: None,
+            extra: Default::default(),
+        }];
+        config.rule_files = vec![crate::config::app_config::RuleFileRef {
+            path: rule_file.to_str().unwrap().to_string(),
+            target: "Proxy".to_string(),
+        }];
+
+        let clash = generate(&config).unwrap();
+        // Only the valid rule + MATCH
+        assert_eq!(clash.rules.len(), 2);
+        assert_eq!(clash.rules[0], "DOMAIN-SUFFIX,valid.com,Proxy");
     }
 }

@@ -181,6 +181,39 @@ enum RuleAction {
         /// File path
         file: PathBuf,
     },
+    /// Manage rule file references (rule sets)
+    Set {
+        #[command(subcommand)]
+        action: RuleSetAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RuleSetAction {
+    /// Create a rule file and add reference to config
+    Add {
+        /// Rule set name (maps to ~/.config/verge-cli/rules/<name>.rules)
+        name: String,
+        /// Default target proxy group for rules in this file
+        target: String,
+    },
+    /// List all rule file references
+    List,
+    /// Remove a rule file reference from config
+    Remove {
+        /// Rule set name
+        name: String,
+    },
+    /// Show contents of a rule file
+    Show {
+        /// Rule set name
+        name: String,
+    },
+    /// Open rule file in $EDITOR
+    Edit {
+        /// Rule set name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]

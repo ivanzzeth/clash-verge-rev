@@ -15,7 +15,7 @@ use anyhow::Result;
 
 use crate::config::app_config::AppConfig;
 use crate::mihomo::client::MihomoClient;
-use crate::{Cli, Commands, ConfigAction, ProxyAction, RuleAction, SubAction};
+use crate::{Cli, Commands, ConfigAction, ProxyAction, RuleAction, RuleSetAction, SubAction};
 
 fn build_client_from_config(
     socket_override: Option<&std::path::Path>,
@@ -62,6 +62,20 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
             RuleAction::Remove { target } => rule::remove(&config, config_path, &target),
             RuleAction::Import { file } => rule::import(&config, config_path, &file),
+            RuleAction::Set { action } => match action {
+                RuleSetAction::Add { name, target } => {
+                    rule::ruleset_add(&config, config_path, &name, &target)
+                }
+                RuleSetAction::List => {
+                    rule::ruleset_list(&config);
+                    Ok(())
+                }
+                RuleSetAction::Remove { name } => {
+                    rule::ruleset_remove(&config, config_path, &name)
+                }
+                RuleSetAction::Show { name } => rule::ruleset_show(&name),
+                RuleSetAction::Edit { name } => rule::ruleset_edit(&name),
+            },
         },
         Commands::Generate { dry_run } => generate::generate_cmd(&config, dry_run),
         Commands::Apply { force } => apply::apply(&config, &client()?, force).await,
