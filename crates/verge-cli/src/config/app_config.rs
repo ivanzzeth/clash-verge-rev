@@ -96,6 +96,11 @@ impl AppConfig {
         Ok(Self::config_dir()?.join("rules"))
     }
 
+    /// Get the backups directory (~/.config/verge-cli/backups/)
+    pub fn backups_dir() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("backups"))
+    }
+
     /// Load config from a file path
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)

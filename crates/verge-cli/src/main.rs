@@ -61,6 +61,16 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Manage config backups
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
+    },
+    /// Restore config from a backup and reload mihomo
+    Rollback {
+        /// Backup ID (epoch seconds). Uses latest if omitted.
+        id: Option<String>,
+    },
     /// Manage proxy groups and nodes
     Proxy {
         #[command(subcommand)]
@@ -122,6 +132,17 @@ enum Commands {
     },
     /// Flush DNS cache
     FlushDns,
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// List available backups with timestamps
+    List,
+    /// Print a backup's config.yaml
+    Show {
+        /// Backup ID (epoch seconds)
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]

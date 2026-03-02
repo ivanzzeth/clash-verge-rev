@@ -1,4 +1,5 @@
 pub mod apply;
+pub mod backup;
 pub mod config_cmd;
 pub mod delay;
 pub mod generate;
@@ -7,6 +8,7 @@ pub mod mode;
 pub mod monitor;
 pub mod proxy;
 pub mod reload;
+pub mod rollback;
 pub mod rule;
 pub mod status;
 pub mod sub;
@@ -15,7 +17,9 @@ use anyhow::Result;
 
 use crate::config::app_config::AppConfig;
 use crate::mihomo::client::MihomoClient;
-use crate::{Cli, Commands, ConfigAction, ProxyAction, RuleAction, RuleSetAction, SubAction};
+use crate::{
+    BackupAction, Cli, Commands, ConfigAction, ProxyAction, RuleAction, RuleSetAction, SubAction,
+};
 
 fn build_client_from_config(
     socket_override: Option<&std::path::Path>,
@@ -79,6 +83,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Generate { dry_run } => generate::generate_cmd(&config, dry_run),
         Commands::Apply { force } => apply::apply(&config, &client()?, force).await,
+        Commands::Backup { action } => match action {
+            BackupAction::List => backup::list(),
+            BackupAction::Show { id } => backup::show(&id),
+        },
+        Commands::Rollback { id } => {
+            rollback::rollback(&config, &client()?, id.as_deref()).await
+        }
         Commands::Proxy { action } => {
             let c = client()?;
             match action {

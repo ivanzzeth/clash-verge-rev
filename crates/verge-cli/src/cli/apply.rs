@@ -1,11 +1,15 @@
 use anyhow::{Context as _, Result};
 use colored::Colorize as _;
 
+use crate::cli::backup;
 use crate::config::app_config::AppConfig;
 use crate::generator::merge;
 use crate::mihomo::client::MihomoClient;
 
 pub async fn apply(config: &AppConfig, client: &MihomoClient, force: bool) -> Result<()> {
+    // Step 0: Backup current state before making changes
+    backup::create_backup(config)?;
+
     // Step 1: Generate config
     println!("Generating config...");
     let final_config = merge::generate(config)?;
@@ -54,7 +58,7 @@ pub async fn apply(config: &AppConfig, client: &MihomoClient, force: bool) -> Re
 
 /// Resolve the path where mihomo can load the config from.
 /// Clash Verge Rev restricts config paths to its data directory.
-fn resolve_reload_path(output_path: &std::path::Path) -> Result<std::path::PathBuf> {
+pub(crate) fn resolve_reload_path(output_path: &std::path::Path) -> Result<std::path::PathBuf> {
     // Check common mihomo data directories
     let data_dirs = [
         dirs::data_dir().map(|d| {
