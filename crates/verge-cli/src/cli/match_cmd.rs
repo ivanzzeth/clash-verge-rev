@@ -9,11 +9,12 @@ pub async fn match_domain(client: &MihomoClient, domain: &str) -> Result<()> {
     let domain_lower = domain.to_lowercase();
 
     for rule in &rules.rules {
-        let matched = match rule.rule_type.as_str() {
-            "DomainSuffix" => domain_lower.ends_with(&rule.payload.to_lowercase()),
-            "DomainKeyword" => domain_lower.contains(&rule.payload.to_lowercase()),
-            "Domain" => domain_lower == rule.payload.to_lowercase(),
-            "Match" => true,
+        let type_lower = rule.rule_type.to_lowercase();
+        let matched = match type_lower.as_str() {
+            "domainsuffix" => domain_lower.ends_with(&rule.payload.to_lowercase()),
+            "domainkeyword" => domain_lower.contains(&rule.payload.to_lowercase()),
+            "domain" => domain_lower == rule.payload.to_lowercase(),
+            "match" => true,
             _ => false,
         };
 
