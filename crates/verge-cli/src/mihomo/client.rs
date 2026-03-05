@@ -426,13 +426,21 @@ impl MihomoClient {
 }
 
 /// Simple percent-encoding for URL path segments
+/// Percent-encode a string for use in URL path/query. UTF-8 bytes are encoded per byte.
 fn urlencoding_encode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            _ => format!("%{:02X}", c as u32),
-        })
-        .collect()
+    let mut out = String::new();
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => {
+                out.push('%');
+                out.push_str(&format!("{:02X}", byte));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
