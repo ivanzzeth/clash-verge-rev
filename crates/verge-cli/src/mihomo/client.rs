@@ -49,6 +49,12 @@ impl MihomoClient {
         self.send_request("PUT", &url, Some(body.to_string())).await
     }
 
+    /// Make a PATCH request with JSON body (e.g. update running config: mode, mixed-port)
+    async fn patch(&self, path: &str, body: &str) -> Result<String> {
+        let url = format!("{}{}", self.base_url(), path);
+        self.send_request("PATCH", &url, Some(body.to_string())).await
+    }
+
     /// Make a POST request
     async fn post(&self, path: &str, body: Option<&str>) -> Result<String> {
         let url = format!("{}{}", self.base_url(), path);
@@ -270,13 +276,13 @@ impl MihomoClient {
     }
 
     pub async fn flush_dns(&self) -> Result<()> {
-        self.post("/cache/flushdns", None).await?;
+        self.post("/cache/dns/flush", None).await?;
         Ok(())
     }
 
     pub async fn set_mode(&self, mode: &str) -> Result<()> {
         let body = serde_json::json!({ "mode": mode }).to_string();
-        self.put("/configs", &body).await?;
+        self.patch("/configs", &body).await?;
         Ok(())
     }
 
