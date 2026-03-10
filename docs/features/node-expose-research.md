@@ -79,11 +79,11 @@ gost -L socks5://:10021 -L http://:10022 -F https://user:pass@server:port
 
 ### 4.1 首选：GOST 作为后端
 
-1. **verge-cli 新增子命令** `expose`：
+1. **verge-cli 新增子命令** `expose`（已实现）：
    - `verge-cli expose list`：列出所有节点及对应端口
-   - `verge-cli expose start [--base-port 10000]`：为每个节点启动 GOST 进程
+   - `verge-cli expose start [--base-port 10000] [--nodes NODE1,NODE2...]`：为节点启动 GOST 进程；`--nodes` 可指定要暴露的节点（默认全部）
    - `verge-cli expose stop`：停止所有 expose 进程
-   - `verge-cli expose generate`：生成 YAML 或 shell 脚本供手动运行
+   - **自动安装 GOST**：检测到 GOST 未安装时，自动下载到 `~/.local/bin`（Linux/macOS，无需 root）
 
 2. **Clash 代理格式 -> GOST 格式** 转换：
    - SS：`ss://base64(method:password)@server:port`（SIP002）

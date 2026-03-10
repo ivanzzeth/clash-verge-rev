@@ -56,8 +56,12 @@ pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
         }
 
         // Collect subscription rules (used as fallback after custom rules)
+        // Skip MATCH, RULE-SET, SUB-RULE (latter two need rule-providers we don't support)
         for rule in sub_config.rules {
-            if !rule.starts_with("MATCH") {
+            if !rule.starts_with("MATCH")
+                && !rule.starts_with("RULE-SET,")
+                && !rule.starts_with("SUB-RULE,")
+            {
                 sub_rules.push(rule);
             }
         }

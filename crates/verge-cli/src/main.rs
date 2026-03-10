@@ -6,8 +6,23 @@ mod model;
 mod subscription;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+#[derive(Clone, Default, ValueEnum)]
+pub enum ListFormat {
+    #[default]
+    Table,
+    Comma,
+    Newline,
+}
+
+#[derive(Clone, Default, ValueEnum)]
+pub enum ListAddr {
+    #[default]
+    Socks5,
+    Http,
+}
 
 #[derive(Parser)]
 #[command(name = "verge-cli", about = "CLI for Clash Verge Rev / mihomo")]
@@ -132,6 +147,51 @@ enum Commands {
     },
     /// Flush DNS cache
     FlushDns,
+    /// Expose nodes as local HTTP/SOCKS5 proxies (for web3 airdrop, etc.)
+    Expose {
+        /// Filter by region: substring match on node names (e.g. 香港, 日本, Hong Kong). Comma-separated for multiple
+        #[arg(long)]
+        region: Option<String>,
+        #[command(subcommand)]
+        action: ExposeAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ExposeAction {
+    /// List nodes and their expose ports
+    List {
+        /// Filter by region: substring match on node names (e.g. 香港, 日本). Comma-separated for multiple
+        #[arg(long)]
+        region: Option<String>,
+        /// Filter by upstream protocol: ss, http, https, socks5. Comma-separated for multiple
+        #[arg(long)]
+        protocol: Option<String>,
+        /// Output format: table (default), comma, newline. Use comma/newline for copy-paste
+        #[arg(long)]
+        format: Option<ListFormat>,
+        /// When format is comma/newline: which address to output (socks5 or http)
+        #[arg(long)]
+        addr: Option<ListAddr>,
+    },
+    /// Start exposing nodes as local proxies
+    Start {
+        /// Base port (default 10000). Each node uses base+N*2 (socks5) and base+N*2+1 (http)
+        #[arg(long, default_value = "10000")]
+        base_port: u16,
+        /// Comma-separated node names to expose (default: all)
+        #[arg(long)]
+        nodes: Option<String>,
+        /// Filter by region: substring match on node names (e.g. 香港, 日本). Comma-separated for multiple
+        #[arg(long)]
+        region: Option<String>,
+    },
+    /// Stop all expose processes
+    Stop {
+        /// Filter by region: only stop matching nodes
+        #[arg(long)]
+        region: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

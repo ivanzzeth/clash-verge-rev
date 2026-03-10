@@ -2,6 +2,7 @@ pub mod apply;
 pub mod backup;
 pub mod config_cmd;
 pub mod delay;
+pub mod expose;
 pub mod generate;
 pub mod match_cmd;
 pub mod mode;
@@ -18,7 +19,8 @@ use anyhow::Result;
 use crate::config::app_config::AppConfig;
 use crate::mihomo::client::MihomoClient;
 use crate::{
-    BackupAction, Cli, Commands, ConfigAction, ProxyAction, RuleAction, RuleSetAction, SubAction,
+    BackupAction, Cli, Commands, ConfigAction, ExposeAction, ProxyAction, RuleAction, RuleSetAction,
+    SubAction,
 };
 
 fn build_client_from_config(
@@ -122,5 +124,30 @@ pub async fn run(cli: Cli) -> Result<()> {
             println!("DNS cache flushed");
             Ok(())
         }
+        Commands::Expose { region, action } => match action {
+            ExposeAction::List { region: r, protocol, format, addr } => {
+                let reg = r.as_deref().or(region.as_deref());
+                let fmt = format.unwrap_or_default();
+                let fmt_str = match fmt {
+                    crate::ListFormat::Table => "table",
+                    crate::ListFormat::Comma => "comma",
+                    crate::ListFormat::Newline => "newline",
+                };
+                let ad = addr.unwrap_or_default();
+                let addr_str = match ad {
+                    crate::ListAddr::Socks5 => "socks5",
+                    crate::ListAddr::Http => "http",
+                };
+                expose::list(&config, reg, protocol.as_deref(), fmt_str, addr_str).await
+            }
+            ExposeAction::Start { base_port, nodes, region: r } => {
+                let reg = r.as_deref().or(region.as_deref());
+                expose::start(&config, base_port, nodes.as_deref(), reg).await
+            }
+            ExposeAction::Stop { region: r } => {
+                let reg = r.as_deref().or(region.as_deref());
+                expose::stop(reg).await
+            }
+        },
     }
 }
