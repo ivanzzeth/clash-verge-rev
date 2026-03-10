@@ -1,19 +1,24 @@
 use anyhow::{Context as _, Result};
+use indexmap::IndexMap;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::Path;
 
 use crate::config::app_config::{expand_tilde, AppConfig};
+use crate::generator::rule_provider::{self, parse_sub_rule_parts, RuleProviderConfig};
 use crate::model::clash::{ClashConfig, ProxyGroup};
 use crate::subscription::parser;
 
 /// Generate the final merged mihomo config
-pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
+pub async fn generate(config: &AppConfig) -> Result<ClashConfig> {
     let cache_dir = AppConfig::subscriptions_dir()?;
+    let config_dir = AppConfig::config_dir()?;
 
     // Step 1: Load all enabled subscriptions
     let mut all_proxies: Vec<serde_yaml_ng::Value> = Vec::new();
     let mut sub_rules: Vec<String> = Vec::new();
+    let mut rule_providers: IndexMap<String, RuleProviderConfig> = IndexMap::new();
+    let mut sub_rules_config: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut seen_proxy_names: HashSet<String> = HashSet::new();
 
     for sub in &config.subscriptions {
@@ -29,8 +34,24 @@ pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
             continue;
         }
 
+        let sub_yaml = std::fs::read_to_string(&cache_path)
+            .with_context(|| format!("read subscription: {}", sub.name))?;
         let sub_config = parser::parse_subscription(&cache_path)
             .with_context(|| format!("failed to parse subscription: {}", sub.name))?;
+
+        // Collect rule-providers from this subscription
+        if let Ok(rp) = rule_provider::parse_rule_providers_from_yaml(&sub_yaml) {
+            for (name, cfg) in rp {
+                rule_providers.insert(name, cfg);
+            }
+        }
+
+        // Collect sub-rules from this subscription
+        if let Ok(sr) = rule_provider::parse_sub_rules_from_yaml(&sub_yaml) {
+            for (name, rules) in sr {
+                sub_rules_config.insert(name, rules);
+            }
+        }
 
         // Step 2: Collect proxies, handle name collisions
         for proxy in sub_config.proxies {
@@ -56,12 +77,9 @@ pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
         }
 
         // Collect subscription rules (used as fallback after custom rules)
-        // Skip MATCH, RULE-SET, SUB-RULE (latter two need rule-providers we don't support)
+        // Skip MATCH only; RULE-SET and SUB-RULE will be expanded
         for rule in sub_config.rules {
-            if !rule.starts_with("MATCH")
-                && !rule.starts_with("RULE-SET,")
-                && !rule.starts_with("SUB-RULE,")
-            {
+            if !rule.starts_with("MATCH") {
                 sub_rules.push(rule);
             }
         }
@@ -214,7 +232,53 @@ pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
         if custom_set.contains(rule.as_str()) {
             continue;
         }
-        // Validate that the rule's target group exists
+        if rule.starts_with("RULE-SET,") {
+            // Expand RULE-SET,name,target into concrete rules
+            let parts: Vec<&str> = rule.splitn(4, ',').collect();
+            if parts.len() < 3 {
+                dropped_rules += 1;
+                continue;
+            }
+            let provider_name = parts[1].trim();
+            let target = parts[2].trim();
+            if !valid_targets.contains(target) {
+                dropped_rules += 1;
+                continue;
+            }
+            let expanded = rule_provider::expand_rule_set(
+                provider_name,
+                target,
+                &rule_providers,
+                &config_dir,
+            )
+            .await;
+            for r in expanded {
+                if rule_target_valid(&r, &valid_targets) && !custom_set.contains(&r) {
+                    rules.push(r);
+                }
+            }
+            continue;
+        }
+        if rule.starts_with("SUB-RULE,") {
+            // Expand SUB-RULE,(condition),name into AND rules
+            if let Some((condition, sub_rule_name)) = parse_sub_rule_parts(rule) {
+                let expanded = rule_provider::expand_sub_rule(
+                    condition,
+                    sub_rule_name,
+                    &sub_rules_config,
+                    &valid_targets,
+                );
+                for r in expanded {
+                    if rule_target_valid(&r, &valid_targets) && !custom_set.contains(&r) {
+                        rules.push(r);
+                    }
+                }
+            } else {
+                dropped_rules += 1;
+            }
+            continue;
+        }
+        // Regular rule: validate target exists
         if rule_target_valid(rule, &valid_targets) {
             rules.push(rule.clone());
         } else {
@@ -253,9 +317,8 @@ pub fn generate(config: &AppConfig) -> Result<ClashConfig> {
 
 /// Check if a rule's target proxy group exists in our config.
 /// Rule format: TYPE,PAYLOAD,TARGET or TYPE,PAYLOAD,TARGET,no-resolve
-/// Also rejects RULE-SET rules (which require rule-providers not in our model).
+/// RULE-SET and SUB-RULE are expanded before this check, so we reject any unexpanded ones.
 fn rule_target_valid(rule: &str, valid_targets: &HashSet<String>) -> bool {
-    // RULE-SET and SUB-RULE require external definitions we don't support yet
     if rule.starts_with("RULE-SET,") || rule.starts_with("SUB-RULE,") {
         return false;
     }
@@ -287,10 +350,14 @@ pub fn write_config(config: &ClashConfig, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn block_on_generate(config: &AppConfig) -> Result<ClashConfig> {
+        tokio::runtime::Runtime::new().unwrap().block_on(generate(config))
+    }
+
     #[test]
     fn generate_empty_config() {
         let config = AppConfig::default();
-        let result = generate(&config);
+        let result = block_on_generate(&config);
         assert!(result.is_ok());
         let clash = result.unwrap();
         assert!(clash.proxies.is_empty());
@@ -309,7 +376,7 @@ mod tests {
             "MATCH,Proxy".to_string(),
         ];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.rules.len(), 3);
         assert_eq!(clash.rules[0], "DOMAIN-SUFFIX,google.com,Proxy");
         assert_eq!(clash.rules[1], "DOMAIN-KEYWORD,openai,ChatGPT");
@@ -327,7 +394,7 @@ mod tests {
             "DOMAIN-SUFFIX,b.com,Direct".to_string(),
         ];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // MATCH should be at the end
         assert!(clash.rules.last().unwrap().starts_with("MATCH"));
         // Non-MATCH rules come first
@@ -344,7 +411,7 @@ mod tests {
         .unwrap();
         config.proxies = vec![proxy];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.proxies.len(), 1);
         assert_eq!(ClashConfig::proxy_name(&clash.proxies[0]), Some("my-socks5"));
     }
@@ -365,7 +432,7 @@ mod tests {
         ];
         config.proxies = proxies;
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Only hk-01 should remain
         assert_eq!(clash.proxies.len(), 1);
         assert_eq!(ClashConfig::proxy_name(&clash.proxies[0]), Some("hk-01"));
@@ -395,7 +462,7 @@ mod tests {
             extra: Default::default(),
         }];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.proxy_groups.len(), 1);
         // "nonexistent" should be filtered out
         assert_eq!(clash.proxy_groups[0].proxies, vec!["node1", "DIRECT"]);
@@ -423,7 +490,7 @@ mod tests {
             extra: Default::default(),
         }];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.proxy_groups.len(), 1);
         assert_eq!(clash.proxy_groups[0].proxies, vec!["HK-01", "HK-02"]);
         // filter field should be cleared
@@ -435,7 +502,7 @@ mod tests {
         let mut config = AppConfig::default();
         config.node_filter = vec!["[invalid".to_string()];
 
-        let result = generate(&config);
+        let result = block_on_generate(&config);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("invalid node_filter regex"));
     }
@@ -457,7 +524,7 @@ mod tests {
             extra: Default::default(),
         }];
 
-        let result = generate(&config);
+        let result = block_on_generate(&config);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("invalid filter regex"));
     }
@@ -499,7 +566,7 @@ mod tests {
             },
         ];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.proxy_groups.len(), 2);
         // "Auto" is a valid group reference
         assert_eq!(
@@ -517,7 +584,7 @@ mod tests {
         .unwrap();
         config.base = base;
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.mixed_port, Some(7897));
         assert_eq!(clash.allow_lan, Some(true));
         assert_eq!(clash.mode.as_deref(), Some("rule"));
@@ -562,7 +629,7 @@ mod tests {
             "MATCH,Proxy".to_string(),
         ];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Custom rules first, MATCH last
         assert_eq!(clash.rules[0], "DOMAIN-SUFFIX,google.com,Proxy");
         assert_eq!(clash.rules[1], "DOMAIN-SUFFIX,github.com,Proxy");
@@ -572,7 +639,7 @@ mod tests {
     #[test]
     fn generate_default_match_rule_when_none_specified() {
         let config = AppConfig::default();
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Should get default MATCH,DIRECT
         assert_eq!(clash.rules.last().unwrap(), "MATCH,DIRECT");
     }
@@ -603,7 +670,7 @@ mod tests {
             target: "Claude".to_string(),
         }];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Rules from file should have target appended
         assert!(clash
             .rules
@@ -651,7 +718,7 @@ mod tests {
             target: "Claude".to_string(),
         }];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Payload-only: target appended from config
         assert!(clash
             .rules
@@ -688,7 +755,7 @@ mod tests {
             target: "Proxy".to_string(),
         }];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Inline rules first, then rule file rules, then MATCH last
         assert_eq!(clash.rules[0], "DOMAIN-SUFFIX,inline.com,Proxy");
         assert_eq!(clash.rules[1], "DOMAIN-SUFFIX,fileset.com,Proxy");
@@ -704,7 +771,7 @@ mod tests {
         }];
 
         // Should not error, just warn
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         assert_eq!(clash.rules.len(), 1); // Only MATCH,DIRECT
     }
 
@@ -734,7 +801,7 @@ mod tests {
             target: "Proxy".to_string(),
         }];
 
-        let clash = generate(&config).unwrap();
+        let clash = block_on_generate(&config).unwrap();
         // Only the valid rule + MATCH
         assert_eq!(clash.rules.len(), 2);
         assert_eq!(clash.rules[0], "DOMAIN-SUFFIX,valid.com,Proxy");

@@ -4,8 +4,8 @@ use colored::Colorize as _;
 use crate::config::app_config::AppConfig;
 use crate::generator::merge;
 
-pub fn generate_cmd(config: &AppConfig, dry_run: bool) -> Result<()> {
-    let final_config = merge::generate(config)?;
+pub async fn generate_cmd(config: &AppConfig, dry_run: bool) -> Result<()> {
+    let final_config = merge::generate(config).await?;
 
     if dry_run {
         let yaml = serde_yaml_ng::to_string(&final_config)?;

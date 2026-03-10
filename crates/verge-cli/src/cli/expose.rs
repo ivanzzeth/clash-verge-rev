@@ -1,6 +1,6 @@
-//! Expose nodes as local HTTP/SOCKS5 proxies via GOST.
+//! Expose nodes as local HTTP/SOCKS5 proxies (Rust local proxy, no GOST).
 //!
-//! Each node gets two local ports: SOCKS5 and HTTP.
+//! Each node gets two local ports: SOCKS5 and HTTP (randomly assigned to avoid conflicts).
 //! State is stored in ~/.config/verge-cli/expose/state.json.
 
 use anyhow::{Context as _, Result};
@@ -8,6 +8,7 @@ use base64::Engine;
 use colored::Colorize as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -15,37 +16,92 @@ use crate::config::app_config::AppConfig;
 use crate::generator::merge;
 use crate::model::clash::ClashConfig;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const GOST_RELEASE_URL: &str =
-    "https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz";
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const GOST_RELEASE_URL: &str =
-    "https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_arm64.tar.gz";
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const GOST_RELEASE_URL: &str =
-    "https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_darwin_amd64.tar.gz";
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const GOST_RELEASE_URL: &str =
-    "https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_darwin_arm64.tar.gz";
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "aarch64"),
-    all(target_os = "macos", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
-)))]
-const GOST_RELEASE_URL: &str = "";
-
 #[derive(Debug, Serialize, Deserialize)]
 struct ExposeState {
     /// node_name -> (socks5_port, http_port, pid)
     nodes: HashMap<String, (u16, u16, u32)>,
+    #[serde(default)]
     base_port: u16,
+}
+
+/// Check if process is still alive (Unix: kill -0).
+fn is_process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        pid > 0
+    }
+}
+
+/// Find an unused port on 127.0.0.1, excluding given ports.
+fn find_unused_port(exclude: &HashSet<u16>) -> Result<u16> {
+    for _ in 0..100 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .context("bind for port discovery")?;
+        let port = listener.local_addr().context("local_addr")?.port();
+        drop(listener);
+        if !exclude.contains(&port) {
+            return Ok(port);
+        }
+    }
+    anyhow::bail!("could not find unused port after 100 attempts")
+}
+
+/// Remove dead processes from state. Returns true if any were pruned.
+fn prune_dead_nodes(state: &mut ExposeState) -> bool {
+    let dead: Vec<String> = state
+        .nodes
+        .iter()
+        .filter(|(_, (_, _, pid))| !is_process_alive(*pid))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for name in &dead {
+        state.nodes.remove(name);
+    }
+    !dead.is_empty()
 }
 
 fn expose_state_path() -> Result<PathBuf> {
     let dir = AppConfig::config_dir()?.join("expose");
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     Ok(dir.join("state.json"))
+}
+
+fn expose_log_dir() -> Result<PathBuf> {
+    let dir = AppConfig::config_dir()?.join("expose").join("logs");
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Sanitize node name for use as log filename (no path separators, limited length).
+fn sanitize_node_name_for_log(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' => '-',
+            c if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' => c,
+            _ => '_',
+        })
+        .take(64)
+        .collect();
+    if s.is_empty() {
+        "node".to_string()
+    } else {
+        s.trim().to_string()
+    }
 }
 
 fn load_state() -> Result<Option<ExposeState>> {
@@ -90,24 +146,7 @@ fn node_matches_region(name: &str, regions: &[String]) -> bool {
     })
 }
 
-fn gost_binary_path() -> Result<PathBuf> {
-    // Prefer PATH first
-    if which::which("gost").is_ok() {
-        return which::which("gost").context("gost in PATH");
-    }
-    // Then ~/.local/bin/gost
-    let home = dirs::home_dir().context("no home dir")?;
-    let local = home.join(".local").join("bin").join("gost");
-    if local.exists() {
-        return Ok(local);
-    }
-    anyhow::bail!(
-        "gost not found. Run 'verge-cli expose start' to auto-install, or install manually:\n  \
-         curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh | bash -s -- --install"
-    )
-}
-
-/// Convert Clash proxy YAML to GOST -F URI. Returns None if unsupported.
+/// Convert Clash proxy YAML to upstream URI (ss://, http://, etc.). Returns None if unsupported.
 fn clash_proxy_to_gost_uri(proxy: &serde_yaml_ng::Value) -> Result<Option<String>> {
     let m = proxy
         .as_mapping()
@@ -177,71 +216,6 @@ fn clash_proxy_to_gost_uri(proxy: &serde_yaml_ng::Value) -> Result<Option<String
     Ok(uri)
 }
 
-/// Ensure GOST is installed. If not, download to ~/.local/bin.
-async fn ensure_gost_installed() -> Result<PathBuf> {
-    if let Ok(p) = gost_binary_path() {
-        return Ok(p);
-    }
-
-    if GOST_RELEASE_URL.is_empty() {
-        anyhow::bail!(
-            "GOST auto-install not supported on this platform. Install manually: \
-             https://github.com/go-gost/gost/releases"
-        );
-    }
-
-    eprintln!("{} GOST not found, installing to ~/.local/bin ...", "→".yellow());
-    let home = dirs::home_dir().context("no home dir")?;
-    let bin_dir = home.join(".local").join("bin");
-    std::fs::create_dir_all(&bin_dir)
-        .with_context(|| format!("failed to create {}", bin_dir.display()))?;
-
-    let client = reqwest::Client::builder()
-        .user_agent("verge-cli/0.1")
-        .build()
-        .context("failed to create HTTP client")?;
-
-    let resp = client
-        .get(GOST_RELEASE_URL)
-        .send()
-        .await
-        .context("failed to download GOST")?;
-    if !resp.status().is_success() {
-        anyhow::bail!("GOST download failed: {}", resp.status());
-    }
-    let bytes = resp.bytes().await.context("failed to read GOST archive")?;
-
-    let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
-    let gost_path = bin_dir.join("gost");
-    for entry in archive.entries().context("invalid tar")? {
-        let mut entry = entry.context("tar entry")?;
-        let path = entry.path().context("entry path")?;
-        if path.file_name().and_then(|n| n.to_str()) == Some("gost") {
-            entry
-                .unpack(&gost_path)
-                .with_context(|| format!("failed to extract to {}", gost_path.display()))?;
-            break;
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&gost_path)
-            .with_context(|| format!("metadata for {}", gost_path.display()))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&gost_path, perms)
-            .with_context(|| format!("chmod {}", gost_path.display()))?;
-    }
-
-    if !gost_path.exists() {
-        anyhow::bail!("GOST extraction failed: binary not found");
-    }
-    eprintln!("{} Installed GOST to {}", "✓".green(), gost_path.display());
-    Ok(gost_path)
-}
-
 /// Parse --protocol "ss,http" into set of upstream types (lowercase)
 fn parse_protocol_filter(protocol: Option<&str>) -> HashSet<String> {
     protocol
@@ -263,6 +237,47 @@ fn uri_matches_protocol(uri: &str, protocols: &HashSet<String>) -> bool {
     protocols.contains(&ty)
 }
 
+/// Spawn verge-cli expose-proxy in a new session (Unix: setsid) so it does not receive SIGHUP.
+/// Stderr is wired to the given Stdio (e.g. log file).
+fn spawn_local_proxy_detached(
+    listen_socks: &str,
+    listen_http: &str,
+    upstream: &str,
+    stderr: Stdio,
+) -> Result<tokio::process::Child> {
+    let exe = std::env::current_exe().context("current executable path")?;
+    let args = [
+        "expose-proxy",
+        "--listen-socks",
+        listen_socks,
+        "--listen-http",
+        listen_http,
+        "--upstream",
+        upstream,
+    ];
+    #[cfg(unix)]
+    let mut cmd = if which::which("setsid").is_ok() {
+        let mut c = tokio::process::Command::new("setsid");
+        c.arg(&exe).args(&args);
+        c
+    } else {
+        let mut c = tokio::process::Command::new(&exe);
+        c.args(&args);
+        c
+    };
+    #[cfg(not(unix))]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new(&exe);
+        c.args(&args);
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .spawn()
+        .context("spawn local proxy")
+}
+
 pub async fn list(
     config: &AppConfig,
     region: Option<&str>,
@@ -270,8 +285,8 @@ pub async fn list(
     format: &str,
     addr: &str,
 ) -> Result<()> {
-    let clash = merge::generate(config)?;
-    let state = load_state()?;
+    let clash = merge::generate(config).await?;
+    let mut state = load_state()?;
     let regions = parse_region_filter(region);
     let protocols = parse_protocol_filter(protocol);
 
@@ -291,9 +306,17 @@ pub async fn list(
                 .as_ref()
                 .and_then(|s| s.nodes.get(&name).copied())
                 .unwrap_or((0, 0, 0));
-            Some((name, uri, socks_port, http_port, pid))
+            let alive = is_process_alive(pid);
+            Some((name, uri, socks_port, http_port, pid, alive))
         })
         .collect();
+
+    // Prune dead nodes from state and persist
+    if let Some(ref mut s) = state {
+        if prune_dead_nodes(s) {
+            let _ = save_state(s);
+        }
+    }
 
     if nodes_to_show.is_empty() {
         println!("No exposable nodes (ss/http/https/socks5 only). Run 'sub update' first.");
@@ -305,8 +328,8 @@ pub async fn list(
             let sep = if format == "comma" { "," } else { "\n" };
             let addrs: Vec<String> = nodes_to_show
                 .iter()
-                .filter(|(_, _, _socks_port, _http_port, pid)| *pid > 0)
-                .map(|(_, _, socks_port, http_port, _)| {
+                .filter(|(_, _, _socks_port, _http_port, _pid, alive)| *alive)
+                .map(|(_, _, socks_port, http_port, _, _)| {
                     let port = if addr == "http" { *http_port } else { *socks_port };
                     format!("127.0.0.1:{}", port)
                 })
@@ -322,7 +345,7 @@ pub async fn list(
                 "HTTP".bold(),
                 "STATUS".bold()
             );
-            for (name, uri, socks_port, http_port, pid) in &nodes_to_show {
+            for (name, uri, socks_port, http_port, pid, alive) in &nodes_to_show {
                 let ty = uri.split("://").next().unwrap_or("?").to_uppercase();
                 let socks = if *socks_port > 0 {
                     format!("127.0.0.1:{}", socks_port)
@@ -334,8 +357,10 @@ pub async fn list(
                 } else {
                     "-".to_string()
                 };
-                let status = if *pid > 0 {
+                let status = if *alive {
                     "running".green().to_string()
+                } else if *pid > 0 {
+                    "dead".red().to_string()
                 } else {
                     "stopped".dimmed().to_string()
                 };
@@ -348,13 +373,10 @@ pub async fn list(
 
 pub async fn start(
     config: &AppConfig,
-    base_port: u16,
     nodes_filter: Option<&str>,
     region: Option<&str>,
 ) -> Result<()> {
-    let gost_path = ensure_gost_installed().await?;
-
-    let clash = merge::generate(config)?;
+    let clash = merge::generate(config).await?;
     let regions = parse_region_filter(region);
 
     let explicit_nodes: Option<std::collections::HashSet<String>> = nodes_filter.map(|s| {
@@ -385,6 +407,14 @@ pub async fn start(
                 continue;
             }
         };
+        if !uri.trim().to_lowercase().starts_with("ss://") {
+            eprintln!(
+                "{} Skipping '{}' (local proxy supports ss only for now)",
+                "!".yellow(),
+                name
+            );
+            continue;
+        }
         to_expose.push((name, uri));
     }
 
@@ -392,46 +422,55 @@ pub async fn start(
         anyhow::bail!("No nodes to expose. Check --nodes or run 'sub update'.");
     }
 
-    // Stop existing nodes we're about to replace; merge with any other running nodes
+    // Load state, prune dead nodes, stop nodes we're about to replace
     let mut new_state = if let Some(mut state) = load_state()? {
+        prune_dead_nodes(&mut state);
         for (name, _) in &to_expose {
             if let Some((_, _, pid)) = state.nodes.remove(name) {
                 let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
             }
         }
-        state.base_port = base_port;
         state
     } else {
         ExposeState {
             nodes: HashMap::new(),
-            base_port,
+            base_port: 0,
         }
     };
 
-    let base_idx = new_state.nodes.len();
-    for (i, (name, uri)) in to_expose.iter().enumerate() {
-        let socks_port = base_port + (base_idx + i) as u16 * 2;
-        let http_port = base_port + (base_idx + i) as u16 * 2 + 1;
+    let mut used_ports: HashSet<u16> = new_state
+        .nodes
+        .values()
+        .flat_map(|(s, h, _)| [*s, *h])
+        .collect();
 
-        let child = tokio::process::Command::new(&gost_path)
-            .args([
-                "-L",
-                &format!("socks5://127.0.0.1:{}", socks_port),
-                "-L",
-                &format!("http://127.0.0.1:{}", http_port),
-                "-F",
-                uri,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .with_context(|| format!("failed to start gost for {}", name))?;
+    let log_dir = expose_log_dir()?;
 
-        // Give it a moment to start
+    for (name, uri) in &to_expose {
+        let socks_port = find_unused_port(&used_ports)?;
+        used_ports.insert(socks_port);
+        let http_port = find_unused_port(&used_ports)?;
+        used_ports.insert(http_port);
+
+        let listen_socks = format!("127.0.0.1:{}", socks_port);
+        let listen_http = format!("127.0.0.1:{}", http_port);
+
+        let log_path = log_dir.join(format!("{}.log", sanitize_node_name_for_log(name)));
+        let log_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .write(true)
+            .open(&log_path)
+            .with_context(|| format!("open log {}", log_path.display()))?;
+
+        let stderr = Stdio::from(log_file);
+
+        let child = spawn_local_proxy_detached(&listen_socks, &listen_http, uri, stderr)
+            .with_context(|| format!("failed to start local proxy for {}", name))?;
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let pid = child.id().context("gost process has no pid")?;
+        let pid = child.id().context("local proxy process has no pid")?;
         new_state.nodes.insert(name.clone(), (socks_port, http_port, pid));
 
         println!(
@@ -444,7 +483,12 @@ pub async fn start(
     }
 
     save_state(&new_state)?;
-    println!("\n{} {} node(s) exposed. Use 'verge-cli expose stop' to stop.", "✓".green(), new_state.nodes.len());
+    println!(
+        "\n{} {} node(s) exposed. Use 'verge-cli expose stop' to stop.",
+        "✓".green(),
+        new_state.nodes.len()
+    );
+    println!("  Logs: {}", log_dir.display());
     Ok(())
 }
 
@@ -456,6 +500,8 @@ pub async fn stop(region: Option<&str>) -> Result<()> {
             return Ok(());
         }
     };
+
+    prune_dead_nodes(&mut state);
 
     let regions = parse_region_filter(region);
     let to_stop: Vec<_> = state

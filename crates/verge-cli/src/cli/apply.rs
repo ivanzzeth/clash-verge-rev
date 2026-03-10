@@ -12,7 +12,7 @@ pub async fn apply(config: &AppConfig, client: &MihomoClient, force: bool) -> Re
 
     // Step 1: Generate config
     println!("Generating config...");
-    let final_config = merge::generate(config)?;
+    let final_config = merge::generate(config).await?;
     let output_path = config.resolved_output_path()?;
     merge::write_config(&final_config, &output_path)?;
     println!("  {} Written to {}", "✓".green(), output_path.display());

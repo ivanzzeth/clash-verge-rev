@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod generator;
+mod local_proxy;
 mod mihomo;
 mod model;
 mod subscription;
@@ -155,6 +156,16 @@ enum Commands {
         #[command(subcommand)]
         action: ExposeAction,
     },
+    /// Internal: run a single local proxy (used by expose start). Do not invoke directly.
+    #[command(hide = true)]
+    ExposeProxy {
+        #[arg(long)]
+        listen_socks: String,
+        #[arg(long)]
+        listen_http: String,
+        #[arg(long)]
+        upstream: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -174,11 +185,8 @@ pub enum ExposeAction {
         #[arg(long)]
         addr: Option<ListAddr>,
     },
-    /// Start exposing nodes as local proxies
+    /// Start exposing nodes as local proxies (ports assigned randomly to avoid conflicts)
     Start {
-        /// Base port (default 10000). Each node uses base+N*2 (socks5) and base+N*2+1 (http)
-        #[arg(long, default_value = "10000")]
-        base_port: u16,
         /// Comma-separated node names to expose (default: all)
         #[arg(long)]
         nodes: Option<String>,

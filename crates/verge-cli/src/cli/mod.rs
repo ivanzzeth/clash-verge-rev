@@ -83,7 +83,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 RuleSetAction::Edit { name } => rule::ruleset_edit(&name),
             },
         },
-        Commands::Generate { dry_run } => generate::generate_cmd(&config, dry_run),
+        Commands::Generate { dry_run } => generate::generate_cmd(&config, dry_run).await,
         Commands::Apply { force } => apply::apply(&config, &client()?, force).await,
         Commands::Backup { action } => match action {
             BackupAction::List => backup::list(),
@@ -140,14 +140,28 @@ pub async fn run(cli: Cli) -> Result<()> {
                 };
                 expose::list(&config, reg, protocol.as_deref(), fmt_str, addr_str).await
             }
-            ExposeAction::Start { base_port, nodes, region: r } => {
+            ExposeAction::Start { nodes, region: r, .. } => {
                 let reg = r.as_deref().or(region.as_deref());
-                expose::start(&config, base_port, nodes.as_deref(), reg).await
+                expose::start(&config, nodes.as_deref(), reg).await
             }
             ExposeAction::Stop { region: r } => {
                 let reg = r.as_deref().or(region.as_deref());
                 expose::stop(reg).await
             }
         },
+        Commands::ExposeProxy {
+            listen_socks,
+            listen_http,
+            upstream,
+        } => {
+            use std::net::SocketAddr;
+            let socks_addr: SocketAddr = listen_socks
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid --listen-socks address"))?;
+            let http_addr: SocketAddr = listen_http
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid --listen-http address"))?;
+            crate::local_proxy::run_proxy(socks_addr, http_addr, &upstream).await
+        }
     }
 }
