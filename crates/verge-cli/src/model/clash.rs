@@ -67,6 +67,10 @@ impl ClashConfig {
     pub fn proxy_name(proxy: &serde_yaml_ng::Value) -> Option<&str> {
         proxy.as_mapping()?.get("name")?.as_str()
     }
+    /// Get server host from a proxy Value (mapping with "server" key)
+    pub fn proxy_server(proxy: &serde_yaml_ng::Value) -> Option<&str> {
+        proxy.as_mapping()?.get("server")?.as_str()
+    }
 }
 
 #[cfg(test)]

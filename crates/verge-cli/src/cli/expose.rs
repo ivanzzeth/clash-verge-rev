@@ -14,6 +14,7 @@ use std::process::Stdio;
 
 use crate::config::app_config::AppConfig;
 use crate::generator::merge;
+use crate::ip_type;
 use crate::model::clash::ClashConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -302,12 +303,13 @@ pub async fn list(
             if !uri_matches_protocol(&uri, &protocols) {
                 return None;
             }
+            let server = ClashConfig::proxy_server(p).map(String::from);
             let (socks_port, http_port, pid) = state
                 .as_ref()
                 .and_then(|s| s.nodes.get(&name).copied())
                 .unwrap_or((0, 0, 0));
             let alive = is_process_alive(pid);
-            Some((name, uri, socks_port, http_port, pid, alive))
+            Some((name, server, uri, socks_port, http_port, pid, alive))
         })
         .collect();
 
@@ -328,8 +330,8 @@ pub async fn list(
             let sep = if format == "comma" { "," } else { "\n" };
             let addrs: Vec<String> = nodes_to_show
                 .iter()
-                .filter(|(_, _, _socks_port, _http_port, _pid, alive)| *alive)
-                .map(|(_, _, socks_port, http_port, _, _)| {
+                .filter(|(_, _, _, _socks_port, _http_port, _pid, alive)| *alive)
+                .map(|(_, _, _, socks_port, http_port, _, _)| {
                     let port = if addr == "http" { *http_port } else { *socks_port };
                     format!("127.0.0.1:{}", port)
                 })
@@ -337,16 +339,41 @@ pub async fn list(
             println!("{}", addrs.join(sep));
         }
         _ => {
+            let config_dir = AppConfig::config_dir()?;
+            let (mut ip_type_cache, ip_type_cache_path) = ip_type::load_ip_type_cache(&config_dir)?;
+            let client = reqwest::Client::new();
+            let unique_servers: HashSet<String> = nodes_to_show
+                .iter()
+                .filter_map(|(_, server, ..)| server.as_ref().cloned())
+                .collect();
+            let mut server_type_map: HashMap<String, String> = HashMap::new();
+            for server in unique_servers {
+                let t = ip_type::get_ip_type(
+                    &server,
+                    &mut ip_type_cache,
+                    &client,
+                    &ip_type_cache_path,
+                    ip_type::CACHE_TTL_SECS,
+                )
+                .await;
+                server_type_map.insert(server, t);
+            }
             println!(
-                "{:<24} {:<8} {:<12} {:<12} {}",
+                "{:<24} {:<8} {:<6} {:<12} {:<12} {}",
                 "NODE".bold(),
                 "TYPE".bold(),
+                "IP".bold(),
                 "SOCKS5".bold(),
                 "HTTP".bold(),
                 "STATUS".bold()
             );
-            for (name, uri, socks_port, http_port, pid, alive) in &nodes_to_show {
+            for (name, server_opt, uri, socks_port, http_port, pid, alive) in &nodes_to_show {
                 let ty = uri.split("://").next().unwrap_or("?").to_uppercase();
+                let ip_label = server_opt
+                    .as_ref()
+                    .and_then(|s| server_type_map.get(s))
+                    .map(|t| ip_type::ip_type_label(t))
+                    .unwrap_or("-");
                 let socks = if *socks_port > 0 {
                     format!("127.0.0.1:{}", socks_port)
                 } else {
@@ -364,7 +391,10 @@ pub async fn list(
                 } else {
                     "stopped".dimmed().to_string()
                 };
-                println!("{:<24} {:<8} {:<12} {:<12} {}", name, ty, socks, http, status);
+                println!(
+                    "{:<24} {:<8} {:<6} {:<12} {:<12} {}",
+                    name, ty, ip_label, socks, http, status
+                );
             }
         }
     }

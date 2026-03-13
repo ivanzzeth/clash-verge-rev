@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod generator;
+mod ip_type;
 mod local_proxy;
 mod mihomo;
 mod model;
