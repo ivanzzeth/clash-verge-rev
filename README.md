@@ -26,21 +26,66 @@ A Clash Meta GUI based on <a href="https://github.com/tauri-apps/tauri">Tauri</a
 | -------------------------------- | --------------------------------- |
 | ![预览](./docs/preview_dark.png) | ![预览](./docs/preview_light.png) |
 
+## Fork Changes
+
+This fork adds **verge-cli**, a command-line tool for managing mihomo/Clash Verge Rev configurations without the GUI. Key features:
+
+- Subscription management, rule editing, config generation & hot-reload
+- Node benchmarking (`verge-cli bench`) with multi-round latency, stability metrics, and segmented measurement (Local→Proxy vs Proxy→Target)
+- Expose proxy nodes as local SOCKS5/HTTP proxies (`verge-cli expose`)
+
 ## Install
 
-请到发布页面下载对应的安装包：[Release page](https://github.com/clash-verge-rev/clash-verge-rev/releases)<br>
-Go to the [Release page](https://github.com/clash-verge-rev/clash-verge-rev/releases) to download the corresponding installation package<br>
-Supports Windows (x64/x86), Linux (x64/arm64) and macOS 10.15+ (intel/apple).
+Download from this fork's release page: **[Release page](https://github.com/ivanzzeth/clash-verge-rev/releases)**
 
-#### 我应当怎样选择发行版
+### Quick Install (Ubuntu/Debian)
 
-| 版本        | 特征                                     | 链接                                                                                   |
-| :---------- | :--------------------------------------- | :------------------------------------------------------------------------------------- |
-| Stable      | 正式版，高可靠性，适合日常使用。         | [Release](https://github.com/clash-verge-rev/clash-verge-rev/releases)                 |
-| Alpha(废弃) | 测试发布流程。                           | [Alpha](https://github.com/clash-verge-rev/clash-verge-rev/releases/tag/alpha)         |
-| AutoBuild   | 滚动更新版，适合测试反馈，可能存在缺陷。 | [AutoBuild](https://github.com/clash-verge-rev/clash-verge-rev/releases/tag/autobuild) |
+```bash
+# GUI app
+wget https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_amd64.deb
+sudo apt install ./Clash.Verge_2.4.7_amd64.deb
 
-#### 安装说明和常见问题，请到 [文档页](https://clash-verge-rev.github.io/) 查看
+# CLI tool (optional)
+wget https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-linux-amd64
+chmod +x verge-cli-linux-amd64
+sudo mv verge-cli-linux-amd64 /usr/local/bin/verge-cli
+verge-cli config init
+```
+
+### Quick Install (macOS)
+
+```bash
+# GUI: download .dmg from release page
+# Apple Silicon
+wget https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_aarch64.dmg
+# Intel
+wget https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_x64.dmg
+
+# CLI tool (optional)
+# Apple Silicon
+wget https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-darwin-arm64
+# Intel
+wget https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-darwin-amd64
+chmod +x verge-cli-darwin-* && sudo mv verge-cli-darwin-* /usr/local/bin/verge-cli
+```
+
+### Windows
+
+Download `Clash.Verge_2.4.7_x64-setup.exe` from the [Release page](https://github.com/ivanzzeth/clash-verge-rev/releases).
+
+### All Platforms
+
+| Platform | GUI | CLI |
+|----------|-----|-----|
+| Windows x64 | [Setup .exe](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_x64-setup.exe) | - |
+| macOS Apple Silicon | [.dmg](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_aarch64.dmg) | [verge-cli](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-darwin-arm64) |
+| macOS Intel | [.dmg](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_x64.dmg) | [verge-cli](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-darwin-amd64) |
+| Linux x64 (.deb) | [.deb](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge_2.4.7_amd64.deb) | [verge-cli](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-linux-amd64) |
+| Linux x64 (.rpm) | [.rpm](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/Clash.Verge-2.4.7-1.x86_64.rpm) | [verge-cli](https://github.com/ivanzzeth/clash-verge-rev/releases/latest/download/verge-cli-linux-amd64) |
+
+---
+
+#### Upstream install docs and FAQ: [Documentation](https://clash-verge-rev.github.io/)
 
 ---
 
