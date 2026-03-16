@@ -145,7 +145,7 @@ jobs:
         run: |
           # Tauri requires a signing key when updater pubkey is configured.
           # Generate a throwaway key pair — we don't use auto-update in the fork.
-          npx @tauri-apps/cli signer generate -w ~/.tauri/fork-key.key -- -p ""
+          pnpm tauri signer generate --ci -w ~/.tauri/fork-key.key
           echo "TAURI_SIGNING_PRIVATE_KEY=$(cat ~/.tauri/fork-key.key)" >> $GITHUB_ENV
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> $GITHUB_ENV
 
