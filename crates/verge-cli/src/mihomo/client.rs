@@ -217,6 +217,7 @@ impl MihomoClient {
         serde_json::from_str(&body).context("failed to parse proxy response")
     }
 
+
     pub async fn set_proxy(&self, group: &str, node: &str) -> Result<()> {
         let encoded = urlencoding_encode(group);
         let body = serde_json::json!({ "name": node }).to_string();

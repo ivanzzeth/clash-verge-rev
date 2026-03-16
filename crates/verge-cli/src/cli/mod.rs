@@ -1,5 +1,6 @@
 pub mod apply;
 pub mod backup;
+pub mod bench;
 pub mod config_cmd;
 pub mod delay;
 pub mod expose;
@@ -110,6 +111,15 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Test { group, url } => {
             delay::test(&client()?, group.as_deref(), &url).await
+        }
+        Commands::Bench {
+            group,
+            url,
+            timeout,
+            rounds,
+            interval,
+        } => {
+            bench::bench(&client()?, group.as_deref(), &url, timeout, rounds, interval).await
         }
         Commands::Mode { mode } => mode::mode(&client()?, mode.as_deref(), json_output).await,
         Commands::Traffic => monitor::traffic(&client()?).await,

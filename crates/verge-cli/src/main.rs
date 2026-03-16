@@ -114,6 +114,24 @@ enum Commands {
         #[arg(long, default_value = "http://www.gstatic.com/generate_204")]
         url: String,
     },
+    /// Benchmark nodes: multi-round latency, stability, and segmented measurement
+    #[command(alias = "b")]
+    Bench {
+        /// Group name (default: first Selector group)
+        group: Option<String>,
+        /// Test URL
+        #[arg(long, default_value = "http://www.gstatic.com/generate_204")]
+        url: String,
+        /// Timeout per probe in ms
+        #[arg(long, default_value = "5000")]
+        timeout: u64,
+        /// Number of test rounds
+        #[arg(long, default_value = "10")]
+        rounds: u32,
+        /// Interval between rounds in seconds
+        #[arg(long, default_value = "30")]
+        interval: u64,
+    },
     /// Get or set proxy mode
     #[command(alias = "m")]
     Mode {
