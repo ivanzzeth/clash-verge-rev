@@ -142,12 +142,16 @@ jobs:
           pnpm run prebuild ${{ matrix.target }}
 
       - name: Generate temporary signing key
+        shell: bash
         run: |
           # Tauri requires a signing key when updater pubkey is configured.
           # Generate a throwaway key pair — we don't use auto-update in the fork.
-          pnpm tauri signer generate --password "" -w ~/.tauri/fork-key.key
-          echo "TAURI_SIGNING_PRIVATE_KEY=$(cat ~/.tauri/fork-key.key)" >> $GITHUB_ENV
-          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> $GITHUB_ENV
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+          pnpm tauri signer generate -w /tmp/fork-signing-key
+          KEY_CONTENT="$(cat /tmp/fork-signing-key)"
+          echo "TAURI_SIGNING_PRIVATE_KEY<<SIGNING_KEY_EOF" >> $GITHUB_ENV
+          echo "$KEY_CONTENT" >> $GITHUB_ENV
+          echo "SIGNING_KEY_EOF" >> $GITHUB_ENV
 
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0.6.1
@@ -155,7 +159,7 @@ jobs:
           NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Clash Verge Rev ${{ github.ref_name }}"
