@@ -32,9 +32,8 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: verge-cli-darwin-amd64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: verge-cli-windows-amd64.exe
+          # Windows skipped: verge-cli uses Unix sockets (tokio::net::UnixStream)
+          # which are not available on Windows
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -147,8 +146,7 @@ jobs:
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # No TAURI_SIGNING_PRIVATE_KEY — fork does not use updater signing
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Clash Verge Rev ${{ github.ref_name }}"
@@ -157,6 +155,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           tauriScript: pnpm
           args: --target ${{ matrix.target }}
+          includeUpdaterJson: false
 
   # ── Publish GitHub Release ─────────────────────────────────────────
   publish:
@@ -211,8 +210,6 @@ jobs:
           - [Linux x64](${{ env.DOWNLOAD_URL }}/verge-cli-linux-amd64)
           - [macOS ARM64](${{ env.DOWNLOAD_URL }}/verge-cli-darwin-arm64)
           - [macOS x64](${{ env.DOWNLOAD_URL }}/verge-cli-darwin-amd64)
-          - [Windows x64](${{ env.DOWNLOAD_URL }}/verge-cli-windows-amd64.exe)
-
           ---
           Built at ${{ env.BUILDTIME }}
           HEREDOC
@@ -230,4 +227,3 @@ jobs:
             cli-artifacts/verge-cli-linux-amd64/verge-cli-linux-amd64
             cli-artifacts/verge-cli-darwin-arm64/verge-cli-darwin-arm64
             cli-artifacts/verge-cli-darwin-amd64/verge-cli-darwin-amd64
-            cli-artifacts/verge-cli-windows-amd64.exe/verge-cli-windows-amd64.exe
