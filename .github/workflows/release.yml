@@ -1,13 +1,8 @@
 name: Release Build
 
 on:
-  # ! 为了避免重复发布版本，应当通过独特 git tag 触发。
-  # ! 不再使用 workflow_dispatch 触发。
-  # workflow_dispatch:
-  push:
-    # -rc tag 时预览发布, 跳过 telegram 通知、跳过 winget 提交、跳过 latest.json 文件更新
-    tags:
-      - "v*.*.*"
+  # Disabled in fork — use fork-release.yml instead
+  workflow_dispatch:
 permissions: write-all
 env:
   CARGO_INCREMENTAL: 0

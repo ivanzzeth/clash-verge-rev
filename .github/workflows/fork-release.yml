@@ -1,0 +1,233 @@
+name: Fork Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions: write-all
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+concurrency:
+  group: "${{ github.workflow }} - ${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  # ── verge-cli standalone binary (lightweight, no Tauri) ────────────
+  release-cli:
+    name: Release verge-cli (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: verge-cli-linux-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: verge-cli-darwin-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: verge-cli-darwin-amd64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: verge-cli-windows-amd64.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91.0"
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "cli-v1"
+          key: "${{ matrix.os }}-${{ matrix.target }}"
+          workspaces: |
+            . -> target
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build verge-cli
+        run: cargo build --release --target ${{ matrix.target }} -p verge-cli
+
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
+        run: cp target/${{ matrix.target }}/release/verge-cli ${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        run: copy target\${{ matrix.target }}\release\verge-cli.exe ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  # ── GUI app (Tauri) ────────────────────────────────────────────────
+  release-gui:
+    name: Release GUI (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91.0"
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "gui-v1"
+          key: "${{ matrix.os }}-${{ matrix.target }}"
+          workspaces: |
+            . -> target
+          cache-all-crates: true
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxslt1.1 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install x86 OpenSSL (macOS Intel)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          arch -x86_64 brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: pnpm install & prebuild
+        run: |
+          pnpm i
+          pnpm run prebuild ${{ matrix.target }}
+
+      - name: Tauri build
+        uses: tauri-apps/tauri-action@v0.6.1
+        env:
+          NODE_OPTIONS: "--max_old_space_size=4096"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Clash Verge Rev ${{ github.ref_name }}"
+          releaseBody: "Building..."
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          tauriScript: pnpm
+          args: --target ${{ matrix.target }}
+
+  # ── Publish GitHub Release ─────────────────────────────────────────
+  publish:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: [release-cli, release-gui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: cli-artifacts
+
+      - name: Fetch changelog
+        id: changelog
+        run: bash ./scripts/extract_update_logs.sh
+        shell: bash
+
+      - name: Set version
+        run: |
+          TAG_REF="${GITHUB_REF##*/}"
+          echo "TAG_NAME=$TAG_REF" >> $GITHUB_ENV
+          VERSION=$(echo "$TAG_REF" | sed 's/^v//')
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUILDTIME=$(TZ=Asia/Shanghai date)" >> $GITHUB_ENV
+          echo "DOWNLOAD_URL=https://github.com/${{ github.repository }}/releases/download/$TAG_REF" >> $GITHUB_ENV
+
+      - name: Generate release notes
+        run: |
+          if [ -z "${UPDATE_LOGS:-}" ]; then
+            UPDATE_LOGS="See Changelog.md for details."
+          fi
+
+          cat > release.txt << 'HEREDOC'
+          $UPDATE_LOGS
+
+          ## Downloads
+
+          ### GUI (Clash Verge Rev)
+
+          #### Windows
+          - [x64 Setup](${{ env.DOWNLOAD_URL }}/Clash.Verge_${{ env.VERSION }}_x64-setup.exe)
+
+          #### macOS
+          - [Apple Silicon (M-series)](${{ env.DOWNLOAD_URL }}/Clash.Verge_${{ env.VERSION }}_aarch64.dmg) | [Intel](${{ env.DOWNLOAD_URL }}/Clash.Verge_${{ env.VERSION }}_x64.dmg)
+
+          #### Linux
+          - [x64 .deb](${{ env.DOWNLOAD_URL }}/Clash.Verge_${{ env.VERSION }}_amd64.deb)
+
+          ### CLI (verge-cli)
+          - [Linux x64](${{ env.DOWNLOAD_URL }}/verge-cli-linux-amd64)
+          - [macOS ARM64](${{ env.DOWNLOAD_URL }}/verge-cli-darwin-arm64)
+          - [macOS x64](${{ env.DOWNLOAD_URL }}/verge-cli-darwin-amd64)
+          - [Windows x64](${{ env.DOWNLOAD_URL }}/verge-cli-windows-amd64.exe)
+
+          ---
+          Built at ${{ env.BUILDTIME }}
+          HEREDOC
+
+      - name: Upload CLI binaries & finalize release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "Clash Verge Rev ${{ env.TAG_NAME }}"
+          body_path: release.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            cli-artifacts/verge-cli-linux-amd64/verge-cli-linux-amd64
+            cli-artifacts/verge-cli-darwin-arm64/verge-cli-darwin-arm64
+            cli-artifacts/verge-cli-darwin-amd64/verge-cli-darwin-amd64
+            cli-artifacts/verge-cli-windows-amd64.exe/verge-cli-windows-amd64.exe
