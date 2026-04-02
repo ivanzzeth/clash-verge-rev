@@ -396,12 +396,20 @@ impl MihomoClient {
             }
         }
 
-        // Return a stream of JSON lines
+        // Return a stream of JSON lines (skip chunk size for chunked encoding)
         Ok(futures_util::stream::unfold(lines, |mut lines| async move {
-            match lines.next_line().await {
-                Ok(Some(line)) if !line.is_empty() => Some((Ok(line), lines)),
-                Ok(_) => None,
-                Err(e) => Some((Err(anyhow::anyhow!("stream read error: {}", e)), lines)),
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) if !line.is_empty() => {
+                        // Skip chunk size lines (hex numbers for chunked encoding)
+                        if line.chars().all(|c| c.is_ascii_hexdigit()) {
+                            continue;
+                        }
+                        return Some((Ok(line), lines));
+                    }
+                    Ok(_) => return None,
+                    Err(e) => return Some((Err(anyhow::anyhow!("stream read error: {}", e)), lines)),
+                }
             }
         }))
     }
