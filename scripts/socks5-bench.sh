@@ -28,7 +28,7 @@ ROUNDS=5
 INTERVAL=10
 TIMEOUT=10
 TEST_URL="http://www.gstatic.com/generate_204"
-CONCURRENCY=20
+CONCURRENCY=5
 NODES_FILE=""
 
 # ── Colors ──
@@ -93,10 +93,17 @@ while IFS= read -r line; do
     uri="$line"
     # Normalize socks5h to socks5 for curl
     uri="${uri/socks5h:\/\//socks5h:\/\/}"
-    # Extract host:port for display name
+    # Extract display name: prefer user part (contains target IP) over host:port
     hostport="${uri#*@}"
     [[ "$hostport" == "$uri" ]] && hostport="${uri#*://}"
     hostport="${hostport%%/*}"
+    # For Bright Data style URIs, extract the target IP from username
+    local_user="${uri#*://}"
+    local_user="${local_user%%@*}"
+    local_user="${local_user%%:*}"
+    if [[ "$local_user" =~ ip-([0-9.]+)$ ]]; then
+        hostport="${BASH_REMATCH[1]}"
+    fi
     if [[ -n "$current_section" ]]; then
         name="${current_section}-${hostport}"
     else
@@ -125,11 +132,14 @@ done
 probe_node() {
     local idx=$1 uri=$2 timeout=$3 url=$4
     local start elapsed http_code
+    local hard_timeout=$((timeout + 3))
+    local connect_timeout=$(( timeout / 2 ))
+    [[ $connect_timeout -lt 3 ]] && connect_timeout=3
     start=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    http_code=$(timeout "$hard_timeout" curl -s -o /dev/null -w "%{http_code}" \
         --proxy "$uri" \
         --max-time "$timeout" \
-        --connect-timeout "$timeout" \
+        --connect-timeout "$connect_timeout" \
         "$url" 2>/dev/null) || http_code="000"
     local end
     end=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
@@ -151,6 +161,8 @@ for round in $(seq 1 "$ROUNDS"); do
     for idx in $(seq 0 $((NODE_COUNT - 1))); do
         probe_node "$idx" "${NODE_URLS[$idx]}" "$TIMEOUT" "$TEST_URL" &
         active=$((active + 1))
+        # Stagger launches to avoid proxy rate-limiting
+        sleep 0.3
         if [[ $active -ge $CONCURRENCY ]]; then
             wait -n 2>/dev/null || wait
             active=$((active - 1))
