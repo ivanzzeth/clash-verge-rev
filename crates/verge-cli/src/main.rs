@@ -268,6 +268,11 @@ enum SubAction {
         /// Subscription name
         name: String,
     },
+    /// Print subscription URL as QR code for mobile import
+    Qr {
+        /// Subscription name (prints all if omitted)
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

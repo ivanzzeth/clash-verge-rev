@@ -60,6 +60,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             SubAction::List => sub::list(&config),
             SubAction::Remove { name } => sub::remove(&config, config_path, &name),
             SubAction::Show { name } => sub::show(&config, &name),
+            SubAction::Qr { name } => sub::qr(&config, name.as_deref()),
         },
         Commands::Rule { action } => match action {
             RuleAction::Add { rule } => rule::add(&config, config_path, &rule),

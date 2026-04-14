@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result};
 use colored::Colorize as _;
+use qrcode::QrCode;
 
 use crate::config::app_config::{AppConfig, Subscription};
 use crate::model::clash::ClashConfig;
@@ -135,5 +136,41 @@ pub fn show(config: &AppConfig, name: &str) -> Result<()> {
     }
 
     println!("{}: {}", "Rules".bold(), parsed.rules.len());
+    Ok(())
+}
+
+pub fn qr(config: &AppConfig, name: Option<&str>) -> Result<()> {
+    let subs: Vec<&Subscription> = match name {
+        Some(n) => {
+            let sub = config.subscriptions.iter().find(|s| s.name == n)
+                .with_context(|| format!("subscription '{}' not found", n))?;
+            vec![sub]
+        }
+        None => config.subscriptions.iter().collect(),
+    };
+
+    if subs.is_empty() {
+        println!("No subscriptions configured");
+        return Ok(());
+    }
+
+    for (i, sub) in subs.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        println!("{}: {}", "Subscription".bold(), sub.name);
+        println!("{}: {}", "URL".bold(), sub.url);
+        println!();
+
+        let code = QrCode::new(sub.url.as_bytes())
+            .with_context(|| format!("failed to encode URL for '{}' as QR code", sub.name))?;
+
+        let string = code.render::<char>()
+            .quiet_zone(true)
+            .module_dimensions(2, 1)
+            .build();
+
+        println!("{}", string);
+    }
     Ok(())
 }
